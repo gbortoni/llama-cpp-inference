@@ -1,0 +1,11 @@
+# CMake build directories
+build/
+build-debug/
+build-asan/
+build-asan-llvm/
+
+# macOS
+.DS_Store
+
+# VS Code
+.vscode/

@@ -497,3 +497,68 @@ load
 ```
 
 The project intentionally keeps sampling and performance analysis simple so that the inference loop, resource ownership, debugging workflow, and runtime behavior remain easy to inspect.
+
+## Inference Instrumentation & Benchmarking
+
+The inference loop exposes separate measurements for:
+
+- **Prefill**: processing the full prompt before generation begins.
+- **Autoregressive decode**: processing one generated token at a time using the KV cache.
+- **End-to-end generation**: total generation-loop throughput, including sampling and other overhead.
+
+The CLI also supports runtime configuration of context capacity, batch capacity, and CPU thread count:
+
+```bash
+./build/llama-cpp-inference \
+  --model <model.gguf> \
+  --prompt "Your prompt" \
+  --tokens 32 \
+  --context 256 \
+  --batch 32 \
+  --threads 2
+```
+
+The program reports both requested and effective runtime settings because llama.cpp may internally adjust values such as context and batch capacity.
+
+### Benchmark Setup
+
+- Hardware: Apple M2 Pro
+- Backend: Metal
+- Model: Stories 15M
+- Quantization: Q4_0
+- Prompt tokens: 28
+- Generated tokens: 32
+- Actual sequence length: 59 positions
+- Metal compute paths warmed before measurement
+- GPU synchronization performed before stopping per-phase timers
+
+The benchmark varies effective context capacity, batch capacity, and CPU thread count while keeping the token workload constant.
+
+| Context | Batch | Threads | Prefill tok/s | Decode tok/s | End-to-End tok/s |
+|--------:|------:|--------:|--------------:|-------------:|-----------------:|
+| 256 | 32 | 2 | 7,407 | 527 | 499 |
+| 256 | 32 | 6 | 7,544 | 701 | 647 |
+| 256 | 64 | 2 | 8,041 | 783 | 719 |
+| 256 | 64 | 6 | 7,693 | 787 | 718 |
+| 512 | 32 | 2 | 8,189 | 687 | 639 |
+| 512 | 32 | 6 | 7,894 | 764 | 701 |
+| 512 | 64 | 2 | 7,729 | 833 | 756 |
+| 512 | 64 | 6 | 8,114 | 756 | 695 |
+
+### Observations
+
+Prefill throughput remained relatively stable at approximately **7.4k–8.2k tokens/s**, while autoregressive decode ranged from approximately **527–833 tokens/s**.
+
+For this workload, autoregressive decoding accounted for more than **90% of measured model-compute time**, making sequential token generation the dominant latency bottleneck.
+
+The effects of context capacity, batch capacity, and CPU thread count were not consistent enough across these single-run measurements to claim a universally optimal configuration. More rigorous repeated-run statistical benchmarking is planned separately.
+
+The configured batch size represents the maximum batch capacity available to llama.cpp. The benchmark prompt contains only 28 tokens, so increasing the configured batch from 32 to 64 does not increase the number of tokens processed during the actual prefill operation.
+
+## KV Cache
+
+During prompt processing, the transformer computes key and value vectors for each token at every layer. These values are stored in the **KV cache**.
+
+During autoregressive generation, previous K/V vectors are reused rather than recomputed. Each newly processed token computes its own Q/K/V values, uses its query to attend over previously cached keys and values, and appends its new K/V vectors to the cache.
+
+This avoids repeatedly recomputing the entire sequence during generation, but the KV cache grows with sequence length, increasing memory usage and the amount of cached data that each subsequent token must attend over.

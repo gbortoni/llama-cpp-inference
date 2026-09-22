@@ -3,6 +3,7 @@
 #include <vector>
 #include <chrono>
 #include <memory>
+#include <optional>
 #include "llama.h"
 #include "ggml-backend.h"
 
@@ -11,6 +12,9 @@ int main(int argc, char ** argv) {
     std::string model_path;
     std::string prompt;
     int n_predict = 64;
+    std::optional<int> context_size;
+    std::optional<int> batch_size;
+    std::optional<int> thread_count;
 
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
@@ -18,7 +22,7 @@ int main(int argc, char ** argv) {
         // --model
         if(arg == "--model"){
             if(i + 1 >= argc){
-                std::cout << "Usage: ./llama-cpp-inference --model <path> --prompt <text> [--tokens <n>]" << "\n";
+                std::cout << "Usage: ./llama-cpp-inference --model <path> --prompt <text> [--tokens <n>] [--context <n>] [--batch <n>] [--threads <n>]\n";
                 return 1;
             }
             model_path = argv[i+1];
@@ -27,7 +31,7 @@ int main(int argc, char ** argv) {
         // --prompt
         else if(arg == "--prompt"){
             if(i + 1 >= argc){
-                std::cout << "Usage: ./llama-cpp-inference --model <path> --prompt <text> [--tokens <n>]" << "\n";
+                std::cout << "Usage: ./llama-cpp-inference --model <path> --prompt <text> [--tokens <n>] [--context <n>] [--batch <n>] [--threads <n>]\n";
                 return 1;
             }
             prompt = argv[i+1];
@@ -36,7 +40,7 @@ int main(int argc, char ** argv) {
         // --tokens
         else if (arg == "--tokens") {
             if (i + 1 >= argc) {
-                std::cout << "Usage: ./llama-cpp-inference --model <path> --prompt <text> [--tokens <n>]\n";
+                std::cout << "Usage: ./llama-cpp-inference --model <path> --prompt <text> [--tokens <n>] [--context <n>] [--batch <n>] [--threads <n>]\n";
                 return 1;
             }
 
@@ -58,6 +62,85 @@ int main(int argc, char ** argv) {
 
             ++i;
         }
+        else if (arg == "--context") {
+            if (i + 1 >= argc) {
+                std::cout << "Usage: ./llama-cpp-inference --model <path> --prompt <text> [--tokens <n>] [--context <n>] [--batch <n>] [--threads <n>]\n";
+                return 1;
+            }
+
+            std::string value = argv[i + 1];
+            std::size_t pos;
+
+            try {
+                context_size = std::stoi(value, &pos);
+
+                if (pos != value.size()) {
+                    std::cerr << "Error: --context must be an integer.\n";
+                    return 1;
+                }
+                if (context_size <= 0) {
+                    std::cerr << "Error: --context must be greater than 0.\n";
+                    return 1;
+                }
+            }
+            catch (const std::exception & e) {
+                std::cerr << "Error: --context must be an integer.\n";
+                return 1;
+            }
+
+            ++i;
+        }
+        else if (arg == "--batch") {
+            if (i + 1 >= argc) {
+                std::cout << "Usage: ./llama-cpp-inference --model <path> --prompt <text> [--tokens <n>] [--context <n>] [--batch <n>] [--threads <n>]\n";
+            }
+
+            std::string value = argv[i + 1];
+            std::size_t pos;
+
+            try {
+                batch_size = std::stoi(value, &pos);
+
+                if (pos != value.size()) {
+                    std::cerr << "Error: --batch must be an integer.\n";
+                    return 1;
+                }
+            }
+            catch (const std::exception & e) {
+                std::cerr << "Error: --batch must be an integer.\n";
+                return 1;
+            }
+
+            ++i;
+        }
+        else if (arg == "--threads") {
+            if (i + 1 >= argc) {
+                std::cout << "Usage: ./llama-cpp-inference --model <path> --prompt <text> [--tokens <n>] [--context <n>] [--batch <n>] [--threads <n>]\n";
+                return 1;
+            }
+
+            std::string value = argv[i + 1];
+            std::size_t pos;
+
+            try {
+                thread_count = std::stoi(value, &pos);
+
+                if (pos != value.size()) {
+                    std::cerr << "Error: --threads must be an integer.\n";
+                    return 1;
+                }
+                if (thread_count <= 0) {
+                    std::cerr << "Error: --threads must be greater than 0.\n";
+                    return 1;
+                }
+            }
+            catch (const std::exception & e) {
+                std::cerr << "Error: --threads must be an integer.\n";
+                return 1;
+            }
+
+            ++i;
+        }
     }
 
     // validate model_path
@@ -73,6 +156,21 @@ int main(int argc, char ** argv) {
     // validate n_predict
     if(n_predict <= 0){
         std::cout << "Tokens has to be a positive non-zero integer" << "\n";
+        return 1;
+    }
+    // validate context_size
+    if (context_size <= 0) {
+        std::cerr << "Context has to be a positive non-zero integer\n";
+        return 1;
+    }
+    // validate batch_size
+    if (batch_size <= 0) {
+        std::cerr << "Batch has to be a positive non-zero integer\n";
+        return 1;
+    }
+    // validate thread_count
+    if (thread_count <= 0) {
+        std::cerr << "Threads has to be a positive non-zero integer\n";
         return 1;
     }
 
@@ -116,15 +214,53 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
+    int required_context = n_prompt + n_predict - 1;
+
     // print the number of tokens
     std::cout << "Prompt Tokens: " << n_prompt << "\n";
+    // print the required context
+    std::cout << "Required Context: " << required_context << "\n";
+    // print the requested context
+    std::cout << "Requested Context: " << context_size.value() << "\n";
 
     // create context parameters
     llama_context_params ctx_params = llama_context_default_params();
 
     // changing some context parameters
-    ctx_params.n_ctx = n_prompt + n_predict - 1;
-    ctx_params.n_batch = n_prompt;
+    if(context_size.has_value()){
+        if(context_size.value() >= required_context){
+            ctx_params.n_ctx = context_size.value();
+        }
+        else{
+            std::cerr << "input context size is too small, required context size must be at least " << required_context << "\n";
+            return 1;
+        }
+    }
+    else{
+        ctx_params.n_ctx = n_prompt + n_predict - 1;
+    }
+    if(batch_size.has_value()){
+        if(batch_size.value() >= n_prompt){
+            ctx_params.n_batch = batch_size.value();
+        }
+        else{
+            std::cerr << "input batch size is too small, required batch size must be at least " << n_prompt << "\n";
+            return 1;
+        }
+    }
+    else{
+        ctx_params.n_batch = n_prompt;
+    }
+    if (thread_count.has_value()) {
+        ctx_params.n_threads = thread_count.value();
+        ctx_params.n_threads_batch = thread_count.value();
+    }
+
+    // print the required context
+    std::cout << "Required Batch: " << n_prompt << "\n";
+    // print the requested context
+    std::cout << "Requested Batch: " << batch_size.value() << "\n";
+
     ctx_params.no_perf = false;
 
     // create context using RAII to manage it
@@ -135,6 +271,33 @@ int main(int argc, char ** argv) {
         std::cerr << "Error: failed to create context.\n";
         return 1;
     }
+
+    // setting two thread parameters (first is for how many CPU threads are used during decode and second is for how many CPU threads are used during prefill)
+    if (thread_count.has_value()) {
+        llama_set_n_threads(ctx.get(), thread_count.value(), thread_count.value());
+    }
+
+    if (thread_count.has_value()) {
+        std::cout << "Requested threads: " << thread_count.value() << "\n";
+    } 
+    else {
+    std::cout << "Requested threads: default\n";
+    }
+
+    // check effective batch size that the llama API makes
+    uint32_t effective_batch = llama_n_batch(ctx.get());
+
+    // check effective context that the llama API makes
+    uint32_t effective_context = llama_n_ctx(ctx.get());
+
+    // check what threads were made
+    int32_t effective_threads = llama_n_threads(ctx.get());
+    int32_t effective_threads_batch = llama_n_threads_batch(ctx.get());
+
+    std::cout << "Effective context: " << effective_context << "\n";
+    std::cout << "Effective batch: " << effective_batch << "\n";
+    std::cout << "Effective generation threads: " << effective_threads << "\n";
+    std::cout << "Effective batch threads : " << effective_threads_batch << "\n";
 
     // set up sampler parameters and edit one of them
     auto sparams = llama_sampler_chain_default_params();
@@ -156,18 +319,70 @@ int main(int argc, char ** argv) {
 
     std::string generated_text;
 
+    // Warm up prefill path.
+    llama_batch warmup_batch =
+            llama_batch_get_one(prompt_tokens.data(), n_prompt);
+
+    if (llama_decode(ctx.get(), warmup_batch) != 0) {
+        std::cerr << "Error: warm-up prefill failed.\n";
+        return 1;
+    }
+    llama_synchronize(ctx.get());
+
+    // Warm up single-token decode path.
+    llama_token warmup_token = prompt_tokens.back();
+
+    warmup_batch = llama_batch_get_one(&warmup_token, 1);
+
+    if (llama_decode(ctx.get(), warmup_batch) != 0) {
+        std::cerr << "Error: warm-up decode failed.\n";
+        return 1;
+    }
+    llama_synchronize(ctx.get());
+
+    // Reset runtime/KV state before the measured run.
+    llama_memory_clear(llama_get_memory(ctx.get()), false);
+
+    bool is_prefill = true;
+    
+    double prefill_seconds = 0.0;
+
+    double autoregressive_decode_seconds = 0.0;
+    
+    int autoregressive_decode_tokens = 0;
+
     // to measure how much time inference takes
     auto start_time = std::chrono::steady_clock::now();
 
     while(generated_tokens < n_predict){
 
+        // start decode timer
+        auto decode_start = std::chrono::steady_clock::now();
+
         // execute transformer architecture using decode
         int decode = llama_decode(ctx.get(), batch);
+
+        llama_synchronize(ctx.get());
+
+        // end decode timer
+        auto decode_end = std::chrono::steady_clock::now();
+
+        // calculate decode duration
+        double decode_seconds = std::chrono::duration<double>(decode_end - decode_start).count();
 
         // check if decode worked
         if(decode != 0){
             std::cerr << "Decode step failed.\n";
             return 1;
+        }
+
+        if(is_prefill) {
+            prefill_seconds = decode_seconds;
+            is_prefill = false;
+        }
+        else{
+            autoregressive_decode_seconds += decode_seconds;
+            ++autoregressive_decode_tokens;            
         }
 
         // sample from the last token in the batch
@@ -207,6 +422,10 @@ int main(int argc, char ** argv) {
 
     double tokens_per_second = generated_tokens / elapsed_seconds;
 
+    double prefill_tokens_per_second = n_prompt / prefill_seconds;
+
+    double end_to_end_generated_tokens_per_second = generated_tokens / elapsed_seconds;
+
     std::cout << "\nGenerated text:\n";
     std::cout << prompt << generated_text << "\n";
 
@@ -214,7 +433,19 @@ int main(int argc, char ** argv) {
     std::cout << "Prompt tokens: " << n_prompt << "\n";
     std::cout << "Generated tokens: " << generated_tokens << "\n";
     std::cout << "Elapsed time: " << elapsed_seconds << " s\n";
-    std::cout << "Tokens/sec: " << tokens_per_second << "\n";
+    std::cout << "Prefill time: " << prefill_seconds << " s\n";
+    std::cout << "Prefill tokens/sec: " << prefill_tokens_per_second << "\n";
+    std::cout << "Autoregressive decode tokens: " << autoregressive_decode_tokens << "\n";
+    std::cout << "Autoregressive decode time: " << autoregressive_decode_seconds << " s\n";
+    double decode_tokens_per_second = 0.0;
+    if(!(autoregressive_decode_seconds == 0.0 || autoregressive_decode_tokens == 0)){
+        decode_tokens_per_second = autoregressive_decode_tokens / autoregressive_decode_seconds;
+        std::cout << "Decode tokens/sec: " << decode_tokens_per_second << "\n";
+    }
+    else{
+        std::cout << "Decode tokens/sec: N/A" << "\n";
+    }
+    std::cout << "End-to-end generated tokens/sec: " << end_to_end_generated_tokens_per_second << "\n";
 
     return 0;
 }

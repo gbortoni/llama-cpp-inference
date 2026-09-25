@@ -3,6 +3,7 @@ build/
 build-debug/
 build-asan/
 build-asan-llvm/
+build-release-check/
 
 # macOS
 .DS_Store

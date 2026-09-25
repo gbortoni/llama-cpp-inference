@@ -2,6 +2,7 @@
 #include <string>
 #include <vector>
 #include <chrono>
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include "llama.h"
@@ -15,6 +16,23 @@ int main(int argc, char ** argv) {
     std::optional<int> context_size;
     std::optional<int> batch_size;
     std::optional<int> thread_count;
+    std::optional<uint32_t> input_seed;
+    int top_k = 40;
+    float top_p = 0.90f;
+    float temperature = 0.8f;
+    enum class RunMode {
+        Interactive,
+        Benchmark
+    };
+    RunMode mode = RunMode::Interactive;
+    bool seed_provided = false;
+    bool top_k_provided = false;
+    bool top_p_provided = false;
+    bool temperature_provided = false;
+    constexpr uint32_t BENCHMARK_SEED = 42;
+    constexpr int BENCHMARK_TOP_K = 40;
+    constexpr float BENCHMARK_TOP_P = 0.9f;
+    constexpr float BENCHMARK_TEMPERATURE = 0.8f;
 
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
@@ -22,7 +40,7 @@ int main(int argc, char ** argv) {
         // --model
         if(arg == "--model"){
             if(i + 1 >= argc){
-                std::cout << "Usage: ./llama-cpp-inference --model <path> --prompt <text> [--tokens <n>] [--context <n>] [--batch <n>] [--threads <n>]\n";
+                std::cout << "Usage: ./llama-cpp-inference --model <path> --prompt <text> [--mode <interactive|benchmark>] [--tokens <n>] [--context <n>] [--batch <n>] [--threads <n>] [--seed <n>] [--top-k <n>] [--top-p <p>] [--temperature <t>]\n";
                 return 1;
             }
             model_path = argv[i+1];
@@ -31,16 +49,35 @@ int main(int argc, char ** argv) {
         // --prompt
         else if(arg == "--prompt"){
             if(i + 1 >= argc){
-                std::cout << "Usage: ./llama-cpp-inference --model <path> --prompt <text> [--tokens <n>] [--context <n>] [--batch <n>] [--threads <n>]\n";
+                std::cout << "Usage: ./llama-cpp-inference --model <path> --prompt <text> [--mode <interactive|benchmark>] [--tokens <n>] [--context <n>] [--batch <n>] [--threads <n>] [--seed <n>] [--top-k <n>] [--top-p <p>] [--temperature <t>]\n";
                 return 1;
             }
             prompt = argv[i+1];
             ++i;
         }
+        else if (arg == "--mode") {
+            if (i + 1 >= argc) {
+                std::cout << "Usage: ./llama-cpp-inference --model <path> --prompt <text> [--mode <interactive|benchmark>] [--tokens <n>] [--context <n>] [--batch <n>] [--threads <n>] [--seed <n>] [--top-k <n>] [--top-p <p>] [--temperature <t>]\n";
+                return 1;
+            }
+
+            std::string proposed_mode = argv[i + 1];
+            if (proposed_mode == "benchmark") {
+                mode = RunMode::Benchmark;
+            }
+            else if (proposed_mode == "interactive") {
+                mode = RunMode::Interactive;
+            }
+            else {
+                std::cerr << "Error: --mode must be either 'interactive' or 'benchmark'.\n";
+                return 1;
+            }
+            ++i;
+        }
         // --tokens
         else if (arg == "--tokens") {
             if (i + 1 >= argc) {
-                std::cout << "Usage: ./llama-cpp-inference --model <path> --prompt <text> [--tokens <n>] [--context <n>] [--batch <n>] [--threads <n>]\n";
+                std::cout << "Usage: ./llama-cpp-inference --model <path> --prompt <text> [--mode <interactive|benchmark>] [--tokens <n>] [--context <n>] [--batch <n>] [--threads <n>] [--seed <n>] [--top-k <n>] [--top-p <p>] [--temperature <t>]\n";
                 return 1;
             }
 
@@ -64,7 +101,7 @@ int main(int argc, char ** argv) {
         }
         else if (arg == "--context") {
             if (i + 1 >= argc) {
-                std::cout << "Usage: ./llama-cpp-inference --model <path> --prompt <text> [--tokens <n>] [--context <n>] [--batch <n>] [--threads <n>]\n";
+                std::cout << "Usage: ./llama-cpp-inference --model <path> --prompt <text> [--mode <interactive|benchmark>] [--tokens <n>] [--context <n>] [--batch <n>] [--threads <n>] [--seed <n>] [--top-k <n>] [--top-p <p>] [--temperature <t>]\n";
                 return 1;
             }
 
@@ -92,7 +129,8 @@ int main(int argc, char ** argv) {
         }
         else if (arg == "--batch") {
             if (i + 1 >= argc) {
-                std::cout << "Usage: ./llama-cpp-inference --model <path> --prompt <text> [--tokens <n>] [--context <n>] [--batch <n>] [--threads <n>]\n";
+                std::cout << "Usage: ./llama-cpp-inference --model <path> --prompt <text> [--mode <interactive|benchmark>] [--tokens <n>] [--context <n>] [--batch <n>] [--threads <n>] [--seed <n>] [--top-k <n>] [--top-p <p>] [--temperature <t>]\n";
+                return 1;
             }
 
             std::string value = argv[i + 1];
@@ -115,7 +153,7 @@ int main(int argc, char ** argv) {
         }
         else if (arg == "--threads") {
             if (i + 1 >= argc) {
-                std::cout << "Usage: ./llama-cpp-inference --model <path> --prompt <text> [--tokens <n>] [--context <n>] [--batch <n>] [--threads <n>]\n";
+                std::cout << "Usage: ./llama-cpp-inference --model <path> --prompt <text> [--mode <interactive|benchmark>] [--tokens <n>] [--context <n>] [--batch <n>] [--threads <n>] [--seed <n>] [--top-k <n>] [--top-p <p>] [--temperature <t>]\n";
                 return 1;
             }
 
@@ -129,10 +167,6 @@ int main(int argc, char ** argv) {
                     std::cerr << "Error: --threads must be an integer.\n";
                     return 1;
                 }
-                if (thread_count <= 0) {
-                    std::cerr << "Error: --threads must be greater than 0.\n";
-                    return 1;
-                }
             }
             catch (const std::exception & e) {
                 std::cerr << "Error: --threads must be an integer.\n";
@@ -140,6 +174,112 @@ int main(int argc, char ** argv) {
             }
 
             ++i;
+        }
+        else if (arg == "--seed") {
+            if (i + 1 >= argc) {
+                std::cout << "Usage: ./llama-cpp-inference --model <path> --prompt <text> [--mode <interactive|benchmark>] [--tokens <n>] [--context <n>] [--batch <n>] [--threads <n>] [--seed <n>] [--top-k <n>] [--top-p <p>] [--temperature <t>]\n";
+                return 1;
+            }
+
+            std::string value = argv[i + 1];
+            std::size_t pos;
+
+            try {
+                long long parsed_seed = std::stoll(value, &pos);
+
+                if (pos != value.size()) {
+                    std::cerr << "Error: --seed must be an integer.\n";
+                    return 1;
+                }
+                if (parsed_seed < 0 || parsed_seed >= static_cast<long long>(UINT32_MAX)) {
+                    std::cerr << "Error: --seed must be between 0 and " << UINT32_MAX - 1 << ".\n";
+                    return 1;
+                }
+
+                input_seed = static_cast<uint32_t>(parsed_seed);
+            }
+            catch (const std::exception & e) {
+                std::cerr << "Error: --seed must be an integer.\n";
+                return 1;
+            }
+            seed_provided = true;
+            ++i;
+        }
+        else if (arg == "--top-k") {
+            if (i + 1 >= argc) {
+                std::cout << "Usage: ./llama-cpp-inference --model <path> --prompt <text> [--mode <interactive|benchmark>] [--tokens <n>] [--context <n>] [--batch <n>] [--threads <n>] [--seed <n>] [--top-k <n>] [--top-p <p>] [--temperature <t>]\n";
+                return 1;
+            }
+
+            std::string value = argv[i + 1];
+            std::size_t pos;
+
+            try {
+                top_k = std::stoi(value, &pos);
+
+                if (pos != value.size()) {
+                    std::cerr << "Error: --top-k must be an integer.\n";
+                    return 1;
+                }
+            }
+            catch (const std::exception & e) {
+                std::cerr << "Error: --top-k must be an integer.\n";
+                return 1;
+            }
+            top_k_provided = true;
+            ++i;
+        }
+        else if (arg == "--top-p") {
+            if (i + 1 >= argc) {
+                std::cout << "Usage: ./llama-cpp-inference --model <path> --prompt <text> [--mode <interactive|benchmark>] [--tokens <n>] [--context <n>] [--batch <n>] [--threads <n>] [--seed <n>] [--top-k <n>] [--top-p <p>] [--temperature <t>]\n";
+                return 1;
+            }
+
+            std::string value = argv[i + 1];
+            std::size_t pos;
+
+            try {
+                top_p = std::stof(value, &pos);
+
+                if (pos != value.size()) {
+                    std::cerr << "Error: --top-p must be a number.\n";
+                    return 1;
+                }
+            }
+            catch (const std::exception & e) {
+                std::cerr << "Error: --top-p must be a number.\n";
+                return 1;
+            }
+            top_p_provided = true;
+            ++i;
+        }
+        else if (arg == "--temperature") {
+            if (i + 1 >= argc) {
+                std::cout << "Usage: ./llama-cpp-inference --model <path> --prompt <text> [--mode <interactive|benchmark>] [--tokens <n>] [--context <n>] [--batch <n>] [--threads <n>] [--seed <n>] [--top-k <n>] [--top-p <p>] [--temperature <t>]\n";
+                return 1;
+            }
+
+            std::string value = argv[i + 1];
+            std::size_t pos;
+
+            try {
+                temperature = std::stof(value, &pos);
+
+                if (pos != value.size()) {
+                    std::cerr << "Error: --temperature must be a number.\n";
+                    return 1;
+                }
+            }
+            catch (const std::exception & e) {
+                std::cerr << "Error: --temperature must be a number.\n";
+                return 1;
+            }
+            temperature_provided = true;
+            ++i;
+        }
+        else {
+            std::cerr << "Error: unknown argument '" << arg << "'.\n";
+            return 1;
         }
     }
 
@@ -159,24 +299,68 @@ int main(int argc, char ** argv) {
         return 1;
     }
     // validate context_size
-    if (context_size <= 0) {
+    if (context_size.has_value() && context_size.value() <= 0) {
         std::cerr << "Context has to be a positive non-zero integer\n";
         return 1;
     }
     // validate batch_size
-    if (batch_size <= 0) {
+    if (batch_size.has_value() && batch_size.value() <= 0) {
         std::cerr << "Batch has to be a positive non-zero integer\n";
         return 1;
     }
     // validate thread_count
-    if (thread_count <= 0) {
+    if (thread_count.has_value() && thread_count.value() <= 0) {
         std::cerr << "Threads has to be a positive non-zero integer\n";
         return 1;
     }
+    // setting seed for stochastic sampling
+    uint32_t seed = BENCHMARK_SEED;
+    if(input_seed.has_value()){
+        seed = input_seed.value();
+    }
+    // validate top-k
+    if (top_k <= 0) {
+        std::cerr << "Top-k has to be a positive non-zero integer\n";
+        return 1;
+    }
+    // validate top-p
+    if (top_p <= 0.0f || top_p > 1.0f) {
+        std::cerr << "Top-p must be greater than 0 and less than or equal to 1\n";
+        return 1;
+    }
+    // validate temperature
+    if (temperature <= 0.0f){
+        std::cerr << "Temperature must be greater than 0\n";
+        return 1;
+    }
+    // validate if benchmark mode is valid
+    if (mode == RunMode::Benchmark && (seed_provided || top_k_provided || top_p_provided || temperature_provided)) {
+        std::cerr << "Error: custom sampling options are not allowed in benchmark mode.\n";
+        return 1;
+    }
+    // set up fixed benchmark parameters
+    if (mode == RunMode::Benchmark) {
+        seed = BENCHMARK_SEED;
+        top_k = BENCHMARK_TOP_K;
+        top_p = BENCHMARK_TOP_P;
+        temperature = BENCHMARK_TEMPERATURE;
+    }
+
 
     std::cout << "Model:  " << model_path << "\n";
     std::cout << "Prompt: " << prompt << "\n";
     std::cout << "Tokens: " << n_predict << "\n";
+    if (mode == RunMode::Benchmark) {
+                std::cout << "Mode: benchmark\n";
+            }
+    else {
+                std::cout << "Mode: interactive\n";
+    }
+    std::cout << "Seed: " << seed << "\n";
+    std::cout << "Top-k: " << top_k << "\n";
+    std::cout << "Top-p: " << top_p << "\n";
+    std::cout << "Temperature: " << temperature << "\n";
+
 
     // Load available compute backends
     ggml_backend_load_all();
@@ -221,7 +405,12 @@ int main(int argc, char ** argv) {
     // print the required context
     std::cout << "Required Context: " << required_context << "\n";
     // print the requested context
-    std::cout << "Requested Context: " << context_size.value() << "\n";
+    if (context_size.has_value()) {
+        std::cout << "Requested Context: " << context_size.value() << "\n";
+    }
+    else {
+        std::cout << "Requested Context: default\n";
+    }
 
     // create context parameters
     llama_context_params ctx_params = llama_context_default_params();
@@ -259,7 +448,12 @@ int main(int argc, char ** argv) {
     // print the required context
     std::cout << "Required Batch: " << n_prompt << "\n";
     // print the requested context
-    std::cout << "Requested Batch: " << batch_size.value() << "\n";
+    if (batch_size.has_value()) {
+        std::cout << "Requested Batch: " << batch_size.value() << "\n";
+    }
+    else {
+        std::cout << "Requested Batch: default\n";
+    }
 
     ctx_params.no_perf = false;
 
@@ -281,7 +475,7 @@ int main(int argc, char ** argv) {
         std::cout << "Requested threads: " << thread_count.value() << "\n";
     } 
     else {
-    std::cout << "Requested threads: default\n";
+        std::cout << "Requested threads: default\n";
     }
 
     // check effective batch size that the llama API makes
@@ -307,8 +501,11 @@ int main(int argc, char ** argv) {
     using SamplerPtr = std::unique_ptr<llama_sampler, decltype(&llama_sampler_free)>;
     SamplerPtr smpl(llama_sampler_chain_init(sparams),llama_sampler_free);
 
-    // initialize greedy sampling
-    llama_sampler_chain_add(smpl.get(),llama_sampler_init_greedy());
+    // initialize sampling chain
+    llama_sampler_chain_add(smpl.get(), llama_sampler_init_top_k(top_k));
+    llama_sampler_chain_add(smpl.get(), llama_sampler_init_top_p(top_p, 1));
+    llama_sampler_chain_add(smpl.get(), llama_sampler_init_temp(temperature));
+    llama_sampler_chain_add(smpl.get(), llama_sampler_init_dist(seed));
 
     // create batch before calling decode
     llama_batch batch = llama_batch_get_one(prompt_tokens.data(), prompt_tokens.size());
@@ -340,8 +537,11 @@ int main(int argc, char ** argv) {
     }
     llama_synchronize(ctx.get());
 
-    // Reset runtime/KV state before the measured run.
+    // Clear runtime/KV state before the measured run.
     llama_memory_clear(llama_get_memory(ctx.get()), false);
+
+    // Reset sampler (seed sequence) before the measured run.
+    llama_sampler_reset(smpl.get());
 
     bool is_prefill = true;
     
@@ -420,14 +620,16 @@ int main(int argc, char ** argv) {
 
     double elapsed_seconds = std::chrono::duration<double>(end_time - start_time).count();
 
-    double tokens_per_second = generated_tokens / elapsed_seconds;
-
     double prefill_tokens_per_second = n_prompt / prefill_seconds;
 
     double end_to_end_generated_tokens_per_second = generated_tokens / elapsed_seconds;
 
-    std::cout << "\nGenerated text:\n";
-    std::cout << prompt << generated_text << "\n";
+    // printing generated text only in interactive mode
+    if (mode == RunMode::Interactive) {
+        std::cout << "\nGenerated text:\n";
+        std::cout << prompt << generated_text << "\n";
+    }
+
 
     std::cout << "\n--- Stats ---\n";
     std::cout << "Prompt tokens: " << n_prompt << "\n";
